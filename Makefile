@@ -1,8 +1,8 @@
 CXX      = g++
-CXXFLAGS = -Wall -Wextra -std=c++17
+CXXFLAGS = -Wall -Wextra -std=c++23
 
-TARGET = listener
-SRCS   = main.cpp listener.cpp
+TARGET = listen
+SRCS   = main.cpp eth_lookup.cpp
 OBJS   = $(SRCS:.cpp=.o)
 
 $(TARGET): $(OBJS)
