@@ -24,6 +24,11 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 
+#include <iostream>
+#include <sys/ioctl.h>
+
+#include <fmt/core.h>
+
 #include "eth_lookup.h"
 
 #ifndef likely
@@ -45,7 +50,6 @@ static const unsigned int blocks = 64;
 volatile int socket_fd;
 static unsigned long packets_total = 0, bytes_total = 0;
 static sig_atomic_t sigint = 0;
-
 
 //---------------------------------------------------------
 struct block_desc {
@@ -99,6 +103,21 @@ static void walk_block(block_desc *pbd) {
     printf("Ending Block | p_total: %lu | b_total: %lu\n", packets_total, bytes_total);
     printf("----------------------------------\n");
 }
+// struct tpacket3_hdr {
+// 	__u32		tp_next_offset;
+// 	__u32		tp_sec;
+// 	__u32		tp_nsec;
+// 	__u32		tp_snaplen;
+// 	__u32		tp_len;
+// 	__u32		tp_status;
+// 	__u16		tp_mac;
+// 	__u16		tp_net;
+// 	/* pkt_hdr variants */
+// 	union {
+// 		struct tpacket_hdr_variant1 hv1;
+// 	};
+// 	__u8		tp_padding[8];
+// };
 
 static void display(tpacket3_hdr *ppd, int pnum) {
     // tpacket_auxdata pdata;
@@ -297,6 +316,51 @@ static void teardown_socket(struct ring *ring, int fd) {
 //                               deallocation of all associated 
 //                               resources.
 
+
+void move_cursor(int x, int y) {
+    printf("\x1b[%d;%dH", y+1, x+1);
+}
+
+// length 32 = "Hash" + "Protocol" + "Src -> Dest" + "Timestamp"
+// 4 spacers (left aligned)
+void print_table_header(winsize *win) {
+    int spw = (win->ws_col - 32) / 4;
+    move_cursor(0,3);
+    fmt::print("Hash{:<{}}", ' ', spw);
+    fmt::print("Protocol{:<{}}", ' ', spw);
+    fmt::print("Src -> Dest{:<{}}", ' ', spw);
+    fmt::print("Timestamp{:<{}}", ' ', spw);
+    // flush required 
+    std::cout << std::flush;
+}
+
+void print_stats(winsize *win) {
+    move_cursor(0,0);
+    // - print outer_pad spaces
+    int outer_pad = (win->ws_col - 40) / 2;
+    fmt::print("{:>{}}", ' ', outer_pad);
+    // - print "Packets: "
+    fmt::print("Packets: ");
+    // - print p_str, width 12, left aligned
+    auto p_str = fmt::format("{}", (double)packets_total);
+    if (unlikely(packets_total > 99999999999)) {
+        p_str = fmt::format("{:.6g}", (double)packets_total);
+    }
+    fmt::print("{:<12}", p_str);
+    // fmt::print("{:>{}}\n", ' ', var);    // width var
+    // - print "Bytes: "
+    fmt::print("Bytes: ");
+    // - print b_str, width 12, left aligned
+    auto b_str = fmt::format("{}", (double)bytes_total);
+    if (unlikely(bytes_total > 999999999999)) {
+        b_str = fmt::format("{:.6g}", (double)bytes_total);
+    }
+    fmt::print("{:<12}", b_str);
+    // - print outer_pad spaces (or dont..)
+    // flush required 
+    std::cout << std::flush;
+}
+
 int main(int argc, char **argp) {
     if (argc != 2) {
         fprintf(stderr, "Usage ex: %s eth0\n", argp[0]);
@@ -331,7 +395,12 @@ int main(int argc, char **argp) {
     pfd.events = POLLIN | POLLERR;
     pfd.revents = 0;
 
-    // [capture] ===========================================================
+    // ---- Display
+    // alternate screen
+    std::cout << "\x1b[?1049h" << std::flush;
+    winsize w = {0};
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    // [running] ===========================================================
     // poll to wait for incoming packets
     while (likely(!sigint)) {
         pbd = (block_desc*) ring.rd[block_idx].iov_base;
@@ -344,9 +413,13 @@ int main(int argc, char **argp) {
 		walk_block(pbd);
 		flush_block(pbd);
 		block_idx = (block_idx + 1) % blocks;
+        print_stats(&w);
+        print_table_header(&w);
     }
 
     // [shutdown] ===========================================================
+    // exit alt screen
+    std::cout << "\x1b[?1049l" << std::flush;
     // Print final exit stats (packet statistics), then
     // destruction of capture socket & deallocation of resources
 	tpacket_stats_v3 stats;
