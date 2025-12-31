@@ -18,6 +18,7 @@ A basic packet listener. Primarily a learning project.
 ## Requirements
 
 - cmake
+- ncurses
 - [fmt](https://github.com/fmtlib/fmt)
 
 ## Building
@@ -29,6 +30,6 @@ A basic packet listener. Primarily a learning project.
   - `cmake ..`
 - Run makefile to build
   - `make`
-- Run listener
-  - `./listen eth0`
+- Run listener (socket requires elevated permissions)
+  - `sudo ./listen eth0`
 

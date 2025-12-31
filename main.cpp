@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <inttypes.h>
+#include <vector>
 
 #include <net/if.h>
 #include <netdb.h>
@@ -24,10 +25,10 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 
-#include <iostream>
 #include <sys/ioctl.h>
 
 #include <fmt/core.h>
+#include <ncurses.h>
 
 #include "eth_lookup.h"
 
@@ -38,6 +39,14 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #endif
 
+//---------------------------------------------------------
+// Formatting constants
+// Not great but resizing is a want not need 
+static const int hash_start = 0;
+static const int proto_start = 11;
+static const int src_start = 42;
+static const int dest_start = 61;
+static const int timestamp_start = 80;
 //---------------------------------------------------------
 // Constants for size of mmap
 static const unsigned long frame_size = PAGE_SIZE << 10;
@@ -67,11 +76,20 @@ struct ring {
     struct tpacket_req3 req;
 };
 
+// display info for each packet
+struct packet_disp {
+    unsigned int rxhash;
+    unsigned short proto;
+    char src[NI_MAXHOST];
+    char dest[NI_MAXHOST];
+    unsigned int secs;
+};
+
 //---------------------------------------------------------
 static int init_socket(ring *ring, char *netdev);
 static void teardown_socket(struct ring *ring, int fd);
-static void display(tpacket3_hdr *ppd, int pnum);
-static void walk_block(block_desc *pbd);
+static void extract_packet(tpacket3_hdr *ppd, int pnum, std::vector<packet_disp> *packets);
+static void walk_block(block_desc *pbd, std::vector<packet_disp> *packets);
 static void sighandler(const int signal) {sigint = 1;}
 //---------------------------------------------------------
 
@@ -82,11 +100,9 @@ static void flush_block(block_desc *pbd) {
 	pbd->h1.block_status = TP_STATUS_KERNEL;
 }
 
-static void walk_block(block_desc *pbd) {
-    printf("----------------------------------\n");
+static void walk_block(block_desc *pbd, std::vector<packet_disp> *packets) {
     int block_status = pbd->h1.block_status;
     int num_packets = pbd->h1.num_pkts;
-    printf("Starting block | status: %d | num_packets: %d\n", block_status, num_packets);
 
     unsigned long bytes = 0;
     tpacket3_hdr *ppd;
@@ -94,14 +110,16 @@ static void walk_block(block_desc *pbd) {
 	ppd = (struct tpacket3_hdr*) ((uint8_t*) pbd + pbd->h1.offset_to_first_pkt);
 
     for (int i = 0; i < num_packets; ++i) {
-        bytes += ppd->tp_snaplen;
-        display(ppd, i);
+        // flag not value
+        if ((ppd->tp_status & TP_STATUS_USER) != 0) {
+            bytes += ppd->tp_snaplen;
+            extract_packet(ppd, i, packets);
+            packets_total++;
+        }
 		ppd = (struct tpacket3_hdr *) ((uint8_t *) ppd + ppd->tp_next_offset);
     }
-    packets_total += num_packets;
+    // packets_total += num_packets;
     bytes_total += bytes;
-    printf("Ending Block | p_total: %lu | b_total: %lu\n", packets_total, bytes_total);
-    printf("----------------------------------\n");
 }
 // struct tpacket3_hdr {
 // 	__u32		tp_next_offset;
@@ -119,24 +137,9 @@ static void walk_block(block_desc *pbd) {
 // 	__u8		tp_padding[8];
 // };
 
-static void display(tpacket3_hdr *ppd, int pnum) {
-    // tpacket_auxdata pdata;
-    // memset(&pdata, 0, sizeof(pdata));
-    // socklen_t len = sizeof(pdata);
-    // int e = getsockopt(socket_fd, SOL_PACKET, PACKET_AUXDATA, &pdata, &len);
-    printf("---- Packet %d ----\n", pnum);
-    printf("Packet rxhash: 0x%x\n", ppd->hv1.tp_rxhash);
-    // printf(
-    // "tp_status: %d\n tp_len: %d\n tp_mac: %d\n tp_vlan_tci: %d\n tp_vlan_tpid: %d\n",
-    //     ppd->tp_status,ppd->tp_len,ppd->tp_mac,ppd->hv1.tp_vlan_tci,
-    //     ppd->hv1.tp_vlan_tpid
-    // );
-
-    // struct ethhdr {
-    //     unsigned char	h_dest[ETH_ALEN];	/* destination eth addr	*/
-    //     unsigned char	h_source[ETH_ALEN];	/* source ether addr	*/
-    //     __be16		h_proto;		/* packet type ID field	*/
-    // } __attribute__((packed));
+static void extract_packet(tpacket3_hdr *ppd, int pnum, std::vector<packet_disp> *packets) {
+    packet_disp p = {0};
+    p.rxhash = ppd->hv1.tp_rxhash;
 
 	struct ethhdr *eth = (struct ethhdr *) ((uint8_t *) ppd + ppd->tp_mac);
 	struct iphdr *ip = (struct iphdr *) ((uint8_t *) eth + ETH_HLEN);
@@ -147,10 +150,12 @@ static void display(tpacket3_hdr *ppd, int pnum) {
     // // 56710 is ETH_P_IPV6
     // printf("56710: 0x%x\n", ntohs(56710));
     // printf("56710: %d\n", ntohs(56710));
-    printf("Eth Protocol: %s\n", eth_p_human(ntohs(eth->h_proto)));
+    // printf("Eth Protocol: %s\n", eth_p_human(ntohs(eth->h_proto)));
+    p.proto = eth->h_proto;
+    p.secs = ppd->tp_sec;
 	if (eth->h_proto == htons(ETH_P_IP)) {
 		struct sockaddr_in ss, sd;
-		char sbuff[NI_MAXHOST], dbuff[NI_MAXHOST];
+        char sbuff[NI_MAXHOST], dbuff[NI_MAXHOST];
 
 		memset(&ss, 0, sizeof(ss));
 		ss.sin_family = PF_INET;
@@ -164,10 +169,11 @@ static void display(tpacket3_hdr *ppd, int pnum) {
 		getnameinfo((struct sockaddr *) &sd, sizeof(sd),
 			    dbuff, sizeof(dbuff), NULL, 0, NI_NUMERICHOST);
 
-		printf("(%s -> %s)\n", sbuff, dbuff);
-	} else {
-        printf("h_proto: %d\n", eth->h_proto);
-    }
+        strncpy(p.src, sbuff, NI_MAXHOST);
+        strncpy(p.dest, dbuff, NI_MAXHOST);
+	}
+
+    packets->insert(packets->begin(), p);
 }
 
 
@@ -231,7 +237,6 @@ static int init_socket(ring *ring, char *netdev) {
     ring->map = static_cast<uint8_t*>(mmap(
         NULL,
         ring->req.tp_block_size * ring->req.tp_block_nr,
-        // adding PROT_WRITE fixed FUCK
         PROT_READ | PROT_WRITE,
         MAP_SHARED | MAP_LOCKED,
         socket_fd,
@@ -282,8 +287,7 @@ static int init_socket(ring *ring, char *netdev) {
     //        make sense only for receiving.
     ll.sll_pkttype = 0;
     ll.sll_halen = 0;
-    // "sll_pkttype" & "sll_hatype" gets set on received packets, can use in display
-    // so needs to be global then?
+    // "sll_pkttype" & "sll_hatype" gets set on received packets, use in display?
 
     err = bind(socket_fd, (struct sockaddr*) &ll, sizeof(ll));
     if (err < 0) {
@@ -302,63 +306,56 @@ static void teardown_socket(struct ring *ring, int fd) {
 }
 
 
-// https://www.kernel.org/doc/Documentation/networking/packet_mmap.txt
-//
-// [setup]     socket() -------> creation of the capture socket
-//             setsockopt() ---> allocation of the circular buffer (ring)
-//                               option: PACKET_RX_RING
-//             mmap() ---------> mapping of the allocated buffer to the
-//                               user process
-//
-// [capture]   poll() ---------> to wait for incoming packets
-//
-// [shutdown]  close() --------> destruction of the capture socket and
-//                               deallocation of all associated 
-//                               resources.
-
-
-void move_cursor(int x, int y) {
-    printf("\x1b[%d;%dH", y+1, x+1);
-}
-
 // length 32 = "Hash" + "Protocol" + "Src -> Dest" + "Timestamp"
 // 4 spacers (left aligned)
-void print_table_header(winsize *win) {
-    int spw = (win->ws_col - 32) / 4;
-    move_cursor(0,3);
-    fmt::print("Hash{:<{}}", ' ', spw);
-    fmt::print("Protocol{:<{}}", ' ', spw);
-    fmt::print("Src -> Dest{:<{}}", ' ', spw);
-    fmt::print("Timestamp{:<{}}", ' ', spw);
-    // flush required 
-    std::cout << std::flush;
+void print_table_header(int cols) {
+    // int spw = (win->ws_col - 32) / 4;
+    move(2, hash_start);
+    printw("Hash");
+    move(2, proto_start);
+    printw("Protocol");
+    move(2, src_start);
+    printw("Src");
+    move(2, dest_start);
+    printw("Dest");
+    move(2, timestamp_start);
+    printw("Timestamp");
+    // auto out_str = fmt::format("Hash{:<{}}", ' ', spw);
+    // out_str += fmt::format("Protocol{:<{}}", ' ', spw);
+    // out_str += fmt::format("Src -> Dest{:<{}}", ' ', spw);
+    // out_str += fmt::format("Timestamp{:<{}}", ' ', spw);
+    // // flush required 
+    // // std::cout << std::flush;
+    // printw("%s", out_str.c_str());
 }
 
-void print_stats(winsize *win) {
-    move_cursor(0,0);
+void print_stats(int cols) {
+    move(0,0);
     // - print outer_pad spaces
-    int outer_pad = (win->ws_col - 40) / 2;
-    fmt::print("{:>{}}", ' ', outer_pad);
+    // int outer_pad = (win->ws_col - 40) / 2;
+    int outer_pad = (cols - 40) / 2;
+    auto out_str = fmt::format("{:>{}}", ' ', outer_pad);
     // - print "Packets: "
-    fmt::print("Packets: ");
+    out_str += fmt::format("Packets: ");
     // - print p_str, width 12, left aligned
     auto p_str = fmt::format("{}", (double)packets_total);
     if (unlikely(packets_total > 99999999999)) {
         p_str = fmt::format("{:.6g}", (double)packets_total);
     }
-    fmt::print("{:<12}", p_str);
+    out_str += fmt::format("{:<12}", p_str);
     // fmt::print("{:>{}}\n", ' ', var);    // width var
     // - print "Bytes: "
-    fmt::print("Bytes: ");
+    out_str += fmt::format("Bytes: ");
     // - print b_str, width 12, left aligned
     auto b_str = fmt::format("{}", (double)bytes_total);
     if (unlikely(bytes_total > 999999999999)) {
         b_str = fmt::format("{:.6g}", (double)bytes_total);
     }
-    fmt::print("{:<12}", b_str);
+    out_str += fmt::format("{:<12}", b_str);
     // - print outer_pad spaces (or dont..)
     // flush required 
-    std::cout << std::flush;
+    // std::cout << std::flush;
+    printw("%s", out_str.c_str());
 }
 
 int main(int argc, char **argp) {
@@ -376,6 +373,11 @@ int main(int argc, char **argp) {
     memset(&pfd, 0, sizeof(pfd));
 
     struct block_desc *pbd;
+
+    // size this according to rows unless in dump mode,
+    // pain with resizing but prevents huge memory on long running
+    std::vector<packet_disp> packets;
+    packets.reserve(1000);
 
     // -----------------------
     struct sigaction action;
@@ -397,9 +399,15 @@ int main(int argc, char **argp) {
 
     // ---- Display
     // alternate screen
-    std::cout << "\x1b[?1049h" << std::flush;
-    winsize w = {0};
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    // std::cout << "\x1b[?1049h" << std::flush;
+    // winsize w = {0};
+    // ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+    int rows,cols;
+    initscr();
+    getmaxyx(stdscr, rows, cols);
+    print_stats(cols);
+    print_table_header(cols);
+    refresh();
     // [running] ===========================================================
     // poll to wait for incoming packets
     while (likely(!sigint)) {
@@ -410,16 +418,41 @@ int main(int argc, char **argp) {
 			continue;
 		}
 
-		walk_block(pbd);
+		walk_block(pbd, &packets);
 		flush_block(pbd);
 		block_idx = (block_idx + 1) % blocks;
-        print_stats(&w);
-        print_table_header(&w);
+        print_stats(cols);
+        print_table_header(cols);
+
+        int n = packets.size();
+        // print packets
+        for (int i = 4; i < rows; i++) {
+            if ((i - 4) < n) {
+                packet_disp p = packets.at(i - 4);
+                move(i, hash_start);
+                // clear previous packet data from line
+                clrtoeol();
+                printw("0x%x", p.rxhash);
+                move(i, proto_start);
+                printw("%s", eth_p_human(ntohs(p.proto)));
+                move(i, src_start);
+                printw("%s", p.src);
+                move(i, dest_start);
+                printw("%s", p.dest);
+                move(i, timestamp_start);
+                printw("%u", p.secs);
+            } else {
+                break;
+            }
+        }
+        refresh();
     }
 
     // [shutdown] ===========================================================
     // exit alt screen
-    std::cout << "\x1b[?1049l" << std::flush;
+    // std::cout << "\x1b[?1049l" << std::flush;
+    endwin();
+
     // Print final exit stats (packet statistics), then
     // destruction of capture socket & deallocation of resources
 	tpacket_stats_v3 stats;
@@ -432,7 +465,7 @@ int main(int argc, char **argp) {
     }
     fflush(stdout);
     printf("===============================================");
-   	printf("\nReceived %u packets, %lu bytes, %u dropped, freeze_q_cnt: %u\n",
+    printf("\nReceived %u packets, %lu bytes, %u dropped, freeze_q_cnt: %u\n",
 	       stats.tp_packets, bytes_total, stats.tp_drops,
 	       stats.tp_freeze_q_cnt);
     printf("===============================================");
