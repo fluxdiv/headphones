@@ -13,6 +13,7 @@ include_directories(${CURSES_INCLUDE_DIR})
 add_executable(listen
   main.cpp
   eth_lookup.cpp
+  display.cpp
 )
 
 target_link_libraries(listen

@@ -1,4 +1,4 @@
-#include "eth_lookup.h"
+#include "eth_lookup.hpp"
 
 struct eth_proto_name {
     uint16_t proto;
