@@ -14,6 +14,7 @@ add_executable(listen
   main.cpp
   eth_lookup.cpp
   display.cpp
+  prom.cpp
 )
 
 target_link_libraries(listen

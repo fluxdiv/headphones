@@ -31,6 +31,7 @@
 
 #include "eth_lookup.hpp"
 #include "display.hpp"
+#include "prom.hpp"
 
 #ifndef likely
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -293,83 +294,26 @@ static void teardown_socket(struct ring *ring, int fd) {
 	close(fd);
 }
 
-void is_on(int flags, int flag) {
-    if ((flags & flag) == 0) {
-        printf("OFF\n");
-    } else {
-        printf("ON\n");
-    }
-}
-
-void toggle_promisc_mode() {
-    int s = socket(AF_PACKET, SOCK_RAW, 0);
-    // int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) {
-        perror("socket");
-        exit(1);
-    }
-
-    // initial ifru_flags: 4163
-    // toggled ifru_flags: 4419
-
-    // -----------------------------------
-    // get current flags & print
-    struct sockaddr f;
-    struct ifreq req;
-    memset(&req, 0, sizeof(req));
-    strcpy(req.ifr_ifrn.ifrn_name, "eth0"); 
-    int v = ioctl(s, SIOCGIFFLAGS, &req);
-    if (v == -1) {
-        perror("1. SIOCGIFFLAGS");
-        close(s);
-        exit(1);
-    }
-    printf("initial ifru_flags: %d\n", req.ifr_ifru.ifru_flags);
-
-    // -----------------------------------
-    // toggle promisc on
-    // req.ifr_ifru.ifru_flags |= IFF_PROMISC;
-    // toggle promisc off
-    req.ifr_ifru.ifru_flags ^= IFF_PROMISC;
-
-    // -----------------------------------
-    // set flags
-    int v2 = ioctl(s, SIOCSIFFLAGS, &req);
-    if (v2 == -1) {
-        perror("2. SIOCSIFFLAGS");
-        close(s);
-        exit(1);
-    }
-
-    // -----------------------------------
-    // re-query flags & prnt
-    // struct ifreq req2;
-    // memset(&req2, 0, sizeof(req2));
-    // strcpy(req2.ifr_ifrn.ifrn_name, "eth0"); 
-    // int v3 = ioctl(s, SIOCGIFFLAGS, &req2);
-    // if (v3 == -1) {
-    //     perror("3. SIOCGIFFLAGS");
-    //     close(s); exit(1);
-    // }
-    // printf("after set & get ifru_flags: %d\n", req2.ifr_ifru.ifru_flags);
-
-    // printf("IFF_UP: ");
-    // is_on(flags, IFF_UP);
-    // printf("IFF_BROADCAST: ");
-    // is_on(flags, IFF_BROADCAST);
-    // printf("IFF_RUNNING: ");
-    // is_on(flags, IFF_RUNNING);
-    close(s);
-}
-
 int main(int argc, char **argp) {
     if (argc != 2) {
-        fprintf(stderr, "Usage ex: %s eth0\n", argp[0]);
+        fprintf(stderr, "Usage:\n");
+        fprintf(stderr, "`%s eth0` - Listen for packets on eth0 interface\n", argp[0]);
+        fprintf(stderr, "`%s pon`  - Turn promiscuous for eth0 on\n", argp[0]);
+        fprintf(stderr, "`%s poff` - Turn promiscuous for eth0 off\n", argp[0]);
+        fprintf(stderr, "`%s pget` - Check promiscuous for eth0\n", argp[0]);
         return EXIT_FAILURE;
     }
 
-    // toggle_promisc_mode();
-    // exit(0);
+    if (std::string_view(argp[1]) == "pon") {
+        int r = toggle_prom_mode_on();
+        exit(r);
+    } else if (std::string_view(argp[1]) == "poff") {
+        int r = toggle_prom_mode_off();
+        exit(r);
+    } else if (std::string_view(argp[1]) == "pget") {
+        int r = get_prom_mode();
+        exit(r);
+    }
 
     // [setup] ===========================================================
     int err = 0, block_idx = 0;
