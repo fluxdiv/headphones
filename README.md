@@ -23,30 +23,28 @@ A basic packet listener. Primarily a learning project.
 
 ## Building
 
-- `git clone`
-- Generate build directory
-  - `mkdir build && cd build`
-- Run cmake to generate makefile
-  - `cmake ..`
-- Run makefile to build
-  - `make`
-- Run listener (socket requires elevated permissions)
-  - `sudo ./listen eth0`
+```shell
+git clone https://github.com/fluxdiv/headphones
+# create build directory
+mkdir build && cd build
+# run cmake to generate makefile
+cmake ..
+# run makefile to build
+make
+# run listener (internal socket creation requires elevated perms)
+sudo ./listen eth0
+```
 
 ## Usage
 
 Running the listener
-```sh
+```shell
+# running the listener
 sudo ./listen eth0
-```
-Check current [promiscuous mode](https://en.wikipedia.org/wiki/Promiscuous_mode)
-```sh
+# check current promiscuous mode
 sudo ./listen pget
-```
-Toggling [promiscuous mode](https://en.wikipedia.org/wiki/Promiscuous_mode) on/off
-```sh
+# toggle promiscuous mode on/off
 sudo ./listen pon
 sudo ./listen poff
 ```
-
-
+- [promiscuous mode](https://en.wikipedia.org/wiki/Promiscuous_mode)
