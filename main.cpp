@@ -298,9 +298,9 @@ int main(int argc, char **argp) {
     if (argc != 2) {
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "`%s eth0` - Listen for packets on eth0 interface\n", argp[0]);
+        fprintf(stderr, "`%s pget` - Check promiscuous for eth0\n", argp[0]);
         fprintf(stderr, "`%s pon`  - Turn promiscuous for eth0 on\n", argp[0]);
         fprintf(stderr, "`%s poff` - Turn promiscuous for eth0 off\n", argp[0]);
-        fprintf(stderr, "`%s pget` - Check promiscuous for eth0\n", argp[0]);
         return EXIT_FAILURE;
     }
 

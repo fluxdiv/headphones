@@ -33,3 +33,20 @@ A basic packet listener. Primarily a learning project.
 - Run listener (socket requires elevated permissions)
   - `sudo ./listen eth0`
 
+## Usage
+
+Running the listener
+```sh
+sudo ./listen eth0
+```
+Check current [promiscuous mode](https://en.wikipedia.org/wiki/Promiscuous_mode)
+```sh
+sudo ./listen pget
+```
+Toggling [promiscuous mode](https://en.wikipedia.org/wiki/Promiscuous_mode) on/off
+```sh
+sudo ./listen pon
+sudo ./listen poff
+```
+
+
